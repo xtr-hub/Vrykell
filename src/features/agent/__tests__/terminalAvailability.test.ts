@@ -1,14 +1,18 @@
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useBlockStore } from '@features/terminal/stores/blocks';
 import { useTerminalStore } from '@features/terminal/stores/terminal';
+import { completionRecoveryReady } from '@features/terminal/services/commandCompletion';
 import { agentControl } from '../services/agentControl';
 import { terminalCommandReady, terminalExecutionState } from '../services/terminalAvailability';
+
+vi.mock('@features/terminal/services/commandCompletion', () => ({ completionRecoveryReady: vi.fn(() => false) }));
 
 const initialTerm = useTerminalStore.getState();
 const initialBlocks = useBlockStore.getState();
 const paneId = 'readiness-pane';
 
 beforeEach(() => {
+  vi.mocked(completionRecoveryReady).mockReturnValue(false);
   useTerminalStore.setState({
     sessions: { [paneId]: 'pty-readiness' },
     startupStates: { [paneId]: 'ready' },
@@ -36,6 +40,14 @@ it('reports ready only for an idle integrated block list', () => {
   expect(terminalCommandReady(paneId)).toBe(false);
 
   useBlockStore.setState({ byTab: { [paneId]: [{ status: 'interrupted' } as never] } });
+  expect(terminalExecutionState(paneId)).toBe('ready');
+  expect(terminalCommandReady(paneId)).toBe(true);
+});
+
+it('lets a late completion marker prove a classic shell is ready again', () => {
+  useTerminalStore.setState((state) => ({ scenes: { ...state.scenes, [paneId]: 'classic' } }));
+  expect(terminalExecutionState(paneId)).toBe('unknown');
+  vi.mocked(completionRecoveryReady).mockReturnValue(true);
   expect(terminalExecutionState(paneId)).toBe('ready');
   expect(terminalCommandReady(paneId)).toBe(true);
 });

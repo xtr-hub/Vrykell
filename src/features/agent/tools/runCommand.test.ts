@@ -11,8 +11,12 @@ vi.mock('@platform/pty', () => ({
 
 import { runCommandAndWait } from '@features/agent/tools/runCommand';
 import { ptyWrite } from '@platform/pty';
+import { Terminal } from '@xterm/xterm';
 import { writeTerminalInput } from '@features/terminal/services/terminalWriteQueue';
 import { setPendingCommandRegistrar } from '@features/terminal/services/pendingCommandRegistry';
+import { clearCompletionReadiness } from '@features/terminal/services/commandCompletion';
+import { registerTerminal, unregisterTerminal } from '@features/terminal/stores/terminal';
+import { terminalCommandReady } from '@features/agent/services/terminalAvailability';
 import { useBlockStore } from '@features/terminal/stores/blocks';
 import { useTerminalStore } from '@features/terminal/stores/terminal';
 import { useSessionStore } from '@features/workspace';
@@ -250,6 +254,32 @@ describe('runCommandAndWait', () => {
     const r = await promise;
     expect(r).toMatchObject({ ok: false, completed: false, code: 'COMMAND_TIMEOUT' });
     expect(r.error).toContain('超时');
+  });
+
+  it('timeout on a classic shell -> a late end marker makes the pane ready for the next command', async () => {
+    const tabId = useSessionStore.getState().addTab({ shellType: 'bash' });
+    const paneId = `${tabId}#0`;
+    useTerminalStore.setState((s) => ({
+      sessions: { ...s.sessions, [paneId]: 'pty-classic' },
+      startupStates: { ...s.startupStates, [paneId]: 'ready' },
+      scenes: { ...s.scenes, [paneId]: 'classic' },
+    }));
+    const terminal = new Terminal({ cols: 80, rows: 5, scrollback: 100 });
+    registerTerminal(paneId, terminal);
+    try {
+      expect(await runCommandAndWait('sleep 999', { paneId, timeoutMs: 20 })).toMatchObject({ code: 'COMMAND_TIMEOUT' });
+      expect(terminalCommandReady(paneId)).toBe(false);
+
+      const payload = vi.mocked(ptyWrite).mock.calls.map(([, data]) => data).join('');
+      const token = /777;(command-[^;]+);/.exec(payload)?.[1];
+      expect(token).toBeTruthy();
+      await new Promise<void>(resolve => terminal.write(`\x1b]777;${token};0\x07`, resolve));
+      expect(terminalCommandReady(paneId)).toBe(true);
+    } finally {
+      clearCompletionReadiness(paneId);
+      unregisterTerminal(paneId, terminal);
+      terminal.dispose();
+    }
   });
 
   it('never treats a quiet terminal snapshot as successful completion', async () => {

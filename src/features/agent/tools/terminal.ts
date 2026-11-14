@@ -30,6 +30,9 @@ import { terminalDisconnected, terminalExecutionState } from '../services/termin
 
 const BLOCK_OUTPUT_CAP = 2000;
 const BLOCK_COUNT = 4;
+/** Screen-update wait bound; a longer request is clamped instead of rejecting the whole call. */
+const MAX_WAIT_MS = 10_000;
+const DEFAULT_WAIT_MS = 300;
 
 /** "Live screen" in the block-list scene = the tails of the most recent command blocks (the main terminal surface is idle there). */
 function blockListContent(paneId: string): string {
@@ -75,14 +78,14 @@ export function buildTerminalTools(ctx: ToolContext) {
     terminal_keys: tool({
       description: DESC_TERMINAL_KEYS,
       inputSchema: z.object({
-        keys: z.string().describe('Raw keys; escapes such as \\b, \\u0018, \\e, \\u001b[A and \\xNN are decoded'),
-        wait_ms: z.number().int().min(0).max(3000).optional().describe('Milliseconds to wait for screen updates, default 300'),
+        keys: z.string().default('').describe('Raw keys; escapes such as \\b, \\u0018, \\e, \\u001b[A and \\xNN are decoded; omit to only wait'),
+        wait_ms: z.number().int().min(0).optional().describe('Milliseconds to wait for screen updates, default 300; values above 10000 are clamped'),
       }),
       execute: async ({ keys, wait_ms }, { toolCallId }) => {
         const g = await gate('terminal_keys', { keys }, toolCallId, ctx);
         if (!g.proceed) return g.result;
         // Tolerant normalization: the model often adds an extra backslash layer (literal text), so decode everything into real control characters.
-        const { keys: normalized, error } = normalizeKeys(keys);
+        const { keys: normalized, error } = normalizeKeys(keys ?? '');
         if (error) {
           return { ok: false, error };
         }
@@ -104,7 +107,7 @@ export function buildTerminalTools(ctx: ToolContext) {
           if (disconnected) return disconnected;
           return { ok: false, error: `写入终端失败: ${e instanceof Error ? e.message : String(e)}` };
         }
-        const wait = wait_ms ?? 300;
+        const wait = Math.min(wait_ms ?? DEFAULT_WAIT_MS, MAX_WAIT_MS);
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const interrupted = terminalDisconnected(paneId, sessionId);
         if (interrupted) return interrupted;

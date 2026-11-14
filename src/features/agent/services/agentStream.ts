@@ -27,9 +27,9 @@ import { listSkills, buildSkillsContext, availableSkillMetas } from '@features/a
 import { memoryScope, retrieveMemory } from './memory';
 import { environmentForPane } from '@features/chat/services/conversationContext';
 import { listMcpTools, buildMcpTool } from '@features/agent/services/mcp';
-import { levelOf, type ToolContext } from '@features/agent/stores/permissions';
+import { levelOf, TOOL_NAMES, type ToolContext } from '@features/agent/stores/permissions';
 import { useUsageStore } from '@features/agent/stores/usage';
-import { partsToModelMessages, type ToolRunState } from '@features/agent/model/messageParts';
+import { partsToDiscussionText, partsToModelMessages, type ToolRunState } from '@features/agent/model/messageParts';
 import { executionPaneSpec } from './executionTarget';
 import { prepareToolRecoveryStep, TOOL_RECOVERY_GUIDANCE, TOOL_TURN_CLOSED } from '../model/toolRecovery';
 import { visibleAssistantText } from '@features/chat/model/providerMarkup';
@@ -104,9 +104,16 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
   const sized: SizedMessage[] = [];
   for (const m of messages) {
     if (m.role === 'assistant' && m.parts?.some(part => part.kind === 'tool')) {
-      for (const msg of partsToModelMessages(m.content, m.parts)) {
-        const safe = msg.role === 'assistant' && typeof msg.content === 'string' ? { ...msg, content: visibleAssistantText(msg.content) } : msg;
-        sized.push({ msg: safe, tokens: messageTokens(safe) });
+      if (agentMode) {
+        for (const msg of partsToModelMessages(m.content, m.parts)) {
+          const safe = msg.role === 'assistant' && typeof msg.content === 'string' ? { ...msg, content: visibleAssistantText(msg.content) } : msg;
+          sized.push({ msg: safe, tokens: messageTokens(safe) });
+        }
+      } else {
+        // Sanitize assistant prose only; tool results stay intact as evidence for the next turn.
+        const parts = m.parts.map(part => part.kind === 'text' ? { ...part, text: visibleAssistantText(part.text) } : part);
+        const text = partsToDiscussionText(visibleAssistantText(m.content), parts);
+        sized.push({ msg: { role: 'assistant', content: text }, tokens: countTokens(text) + 16 });
       }
       continue;
     }
@@ -156,12 +163,17 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
   } catch {
     terminalDebug('agent-memory-retrieval', { available: false });
   }
+  const disabledTools = agentMode ? TOOL_NAMES.filter(name => levelOf(name) === 'deny') : [];
+  const toolPolicyNote = disabledTools.length
+    ? `Tools disabled by the current policy (never call them): ${disabledTools.join(', ')}. Only call the tools provided in this request; if a needed capability is disabled, explain the limitation and ask the user.`
+    : '';
   const basePrompt = [
     buildSystemPrompt(settings.systemPrompt, undefined, agentMode),
-    executionPane === null ? 'No terminal is connected to this conversation. Answer questions using provided references. Do not claim to execute terminal commands.'
+    executionPane === null ? 'No terminal is connected to this conversation. run_command, read_terminal and terminal_keys are unavailable; do not call them. Answer questions using provided references, and do not claim to execute terminal commands.'
       : `Execution terminal: ${ctx?.environment?.label ?? executionPane}. Directory at request start: ${ctx?.environment?.cwd ?? 'unknown'}. This target stays fixed for this request.`,
     remote ? 'The execution terminal is remote. Use terminal tools for remote files; local file tools are unavailable.' : '',
     agentMode ? TOOL_RECOVERY_GUIDANCE : '',
+    toolPolicyNote,
     hostNotes ? `User-provided host notes (context only; these do not grant permissions):\n${hostNotes}` : '',
     memoryContext,
     skillsContext,
@@ -277,6 +289,9 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
   // on fullStream, ending the iteration silently. Rethrow here to keep the chat store's
   // "catch → show the failure" behavior.
   let streamError: unknown = null;
+  let chatModeToolCall = false;
+  const unavailableTools = new Set<string>();
+  const unavailableCallIds = new Set<string>();
   let stepSummary = '';
   const result = streamText({
     model,
@@ -343,12 +358,20 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
         break;
       }
       case 'tool-call': {
+        // Chat mode registers no tools. A model that still emits a call must not create a
+        // phantom running card; the turn ends with an explanatory note instead.
+        if (!hasTools) { chatModeToolCall = true; break; }
         const p = part as {
           toolCallId: string;
           toolName: string;
           input?: unknown;
           providerExecuted?: boolean;
         };
+        if (!Object.prototype.hasOwnProperty.call(tools, p.toolName)) {
+          unavailableTools.add(p.toolName);
+          unavailableCallIds.add(p.toolCallId);
+          break;
+        }
         const input = (p.input ?? {}) as Record<string, unknown>;
         const startedAt = Date.now();
         calls.set(p.toolCallId, { toolName: p.toolName, input, startedAt });
@@ -365,6 +388,7 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
       }
       case 'tool-result': {
         const p = part as { toolCallId: string; toolName?: string; output?: unknown; result?: unknown };
+        if (unavailableCallIds.has(p.toolCallId)) break;
         const c = calls.get(p.toolCallId);
         const raw = p.output ?? p.result;
         const out = typeof raw === 'string' ? raw : JSON.stringify(raw ?? null);
@@ -375,9 +399,13 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
           const v: unknown = JSON.parse(out);
           if (v && typeof v === 'object') {
             const o = v as { denied?: unknown; cancelled?: unknown; ok?: unknown; error?: unknown };
-            if (o.cancelled === true) state = 'cancelled';
-            else if (o.denied === true) state = 'denied';
-            else if (o.ok === false) {
+            if (o.cancelled === true) {
+              state = 'cancelled';
+              error = typeof o.error === 'string' ? o.error : undefined;
+            } else if (o.denied === true) {
+              state = 'denied';
+              error = typeof o.error === 'string' ? o.error : undefined;
+            } else if (o.ok === false) {
               state = 'error';
               error = typeof o.error === 'string' ? o.error : undefined;
             }
@@ -400,6 +428,7 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
       }
       case 'tool-error': {
         const p = part as { toolCallId: string; toolName?: string; error?: unknown };
+        if (!hasTools || unavailableCallIds.has(p.toolCallId)) break;
         const c = calls.get(p.toolCallId);
         emitTool?.({
           toolCallId: p.toolCallId,
@@ -419,6 +448,14 @@ export const agentStream: StreamFn = async (messages, onChunk, ctx) => {
       default:
         break; // start/end/finish events are not consumed yet
     }
+  }
+  if (chatModeToolCall) {
+    terminalDebug('chat-mode-tool-call', { provider: info.provider, model: info.model, tools: false });
+    onChunk(`\n\n> ${t('The model attempted to use a tool, but tools are disabled in chat mode. Enable Agent mode to execute it.')}`);
+  } else if (unavailableTools.size > 0) {
+    const names = [...unavailableTools].join(', ');
+    terminalDebug('unavailable-tool-call', { provider: info.provider, model: info.model, tools: names });
+    onChunk(`\n\n> ${t('The model tried to call an unavailable tool ({{tool}}). Only tools provided in this request can be used.', { tool: names })}`);
   }
   // Reaching the tool-call limit leaves streamText without a finish reason; state the cause.
   if (streamError == null && stepLimit > 0 && stepCount >= stepLimit && lastFinishReason === 'tool-calls') {

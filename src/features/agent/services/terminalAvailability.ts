@@ -1,6 +1,7 @@
 import { t } from '@i18n';
 import { useTerminalStore } from '@features/terminal/stores/terminal';
 import { useBlockStore } from '@features/terminal/stores/blocks';
+import { completionRecoveryReady } from '@features/terminal/services/commandCompletion';
 import { agentControl } from './agentControl';
 
 export type TerminalExecutionState = 'busy' | 'ready' | 'interactive' | 'unknown';
@@ -20,6 +21,9 @@ export function terminalExecutionState(paneId: string): TerminalExecutionState {
   const scene = useTerminalStore.getState().scenes[paneId];
   if (scene === 'altScreen') return 'interactive';
   if (scene === 'blockList') return 'ready';
+  // A classic screen is not ready on silence alone. A retained marker from the command whose
+  // wait timed out is positive evidence that this shell reached a prompt again.
+  if (completionRecoveryReady(paneId)) return 'ready';
   return 'unknown';
 }
 

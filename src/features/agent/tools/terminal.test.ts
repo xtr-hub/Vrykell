@@ -106,6 +106,26 @@ describe('terminal_keys tool', () => {
       expect(invokeMock).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); }
   });
+  it('accepts a longer screen-update wait and clamps anything beyond the bound', async () => {
+    vi.useFakeTimers();
+    try {
+      termMock.state.sessions = { p1: 's1' };
+      const tool = buildTerminalTools(CTX).terminal_keys as unknown as {
+        inputSchema: { safeParse: (value: unknown) => { success: boolean } };
+      };
+      expect(tool.inputSchema.safeParse({ keys: '', wait_ms: 4000 }).success).toBe(true);
+      expect(tool.inputSchema.safeParse({ keys: '', wait_ms: 20_000 }).success).toBe(true);
+      expect(tool.inputSchema.safeParse({ wait_ms: 1000 }).success).toBe(true);
+      const result = execOf(buildTerminalTools(CTX).terminal_keys)({ keys: '', wait_ms: 20_000 });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await result).toMatchObject({ ok: true, waited_ms: 10_000 });
+      const waitOnly = execOf(buildTerminalTools(CTX).terminal_keys)({ wait_ms: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await waitOnly).toMatchObject({ ok: true, waited_ms: 1000 });
+      expect(invokeMock).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('sends keys: \\xNN normalization, wait_ms pass-through, returns the scene', async () => {
     termMock.state.sessions = { p1: 's1' };
     termMock.state.scenes = { p1: 'altScreen' };

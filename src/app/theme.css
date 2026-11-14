@@ -990,6 +990,7 @@ button.ai-tool-run-menu { padding-inline: 9px; border-left: 1px solid color-mix(
 .ai-tool-run-actions:is(:hover, :focus-within) { background: var(--primary-button-hover-bg); }.ai-tool-terminal-link { margin: 0 10px 8px; padding: 3px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--accent-blue); font-size: var(--fs-micro); cursor: pointer; transition: background var(--dur-fast) var(--ease); }
 /* Why a call was refused stays readable after the approval buttons are gone. */
 .ai-tool-verdict { padding: 4px 0 2px; color: var(--text-muted); font-size: var(--fs-micro); line-height: 1.5; }
+.ai-tool-card[data-tool-state="error"] .ai-tool-verdict { color: var(--error-light); }
 .ai-tool-terminal-link:hover, .ai-tool-terminal-link:focus-visible { background: var(--button-hover); }
 .ai-tool-terminal-link:active { background: var(--control-active-bg); }
 .ai-thinking.ai-tool-card { border: 0; border-radius: 0; background: transparent; }

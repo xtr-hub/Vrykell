@@ -251,12 +251,13 @@ test('tool activity stays available within the plain conversation flow', async (
     inner: getComputedStyle(element.firstElementChild as HTMLElement).overflowY,
   }));
   expect(scroll).toEqual({ wrapper: 'auto', inner: 'hidden' });
-  // History stays quiet until a stored failure is explicitly reviewed.
+  // History stays quiet until a stored failure is explicitly expanded in its card.
   const failed = rows.nth(2);
   await expect(page.getByRole('alert')).toHaveCount(0);
   await expect(failed.locator('.ai-tool-summary')).toHaveAttribute('aria-expanded', 'false');
   await failed.locator('.ai-tool-summary').click();
-  await expect(page.getByRole('alert')).toContainText('Exit code 2');
+  await expect(failed.locator('.ai-tool-verdict')).toContainText('Exit code 2');
+  await expect(page.getByRole('alert')).toHaveCount(0);
   // The copy target sits in the frame corner and appears with the hovered output.
   const copy = page.getByTestId('tool-output-copy');
   await expect(copy).toHaveCSS('opacity', '0');

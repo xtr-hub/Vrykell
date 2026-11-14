@@ -15,6 +15,8 @@ import {
   getFocusedTerminalId,
   getRecentOutputFor,
   watchShellCommandCompletion,
+  retainCompletionForReadiness,
+  clearCompletionReadiness,
   type ShellCommandCompletion,
 } from '@features/terminal';
 import { agentControl } from '@features/agent/services/agentControl';
@@ -93,11 +95,20 @@ export async function runCommandAndWait(
   const pane = executionPaneSpec(paneId);
   const posix = pane?.kind === 'ssh' || ['bash', 'zsh', 'sh'].includes(pane?.shellType ?? '');
   const completion = ts.scenes[paneId] === 'classic' && posix ? watchShellCommandCompletion(paneId) : null;
+  clearCompletionReadiness(paneId);
+  let retainedCompletion = false;
   agentControl.acquire(paneId);
   diagnostic('agent-command-start', { paneId, completionMode: completion ? 'marker' : 'block' });
   try {
     await writeTerminalCommand(paneId, sessionId, completion ? completion.wrap(command) : command, undefined, opts?.signal);
     const result = await waitForCompletion(paneId, sessionId, command, t0, opts?.toolCallId, opts?.signal, timeoutMs, completion);
+    // A timed-out shell keeps running; its marker still tells us when the prompt returns, so the
+    // queue can recover in the same turn instead of waiting for a new message.
+    if (completion && (result.code === 'COMMAND_TIMEOUT' || result.code === 'COMMAND_UNCONFIRMED')) {
+      // Already-arrived markers settle immediately; pending ones stay watched until the prompt returns.
+      retainCompletionForReadiness(paneId, completion);
+      retainedCompletion = true;
+    }
     diagnostic('agent-command-completion', { paneId, completed: result.completed ?? false, ok: result.ok, exitCode: result.exitCode, outputChars: result.output.length });
     return result;
   } catch (e) {
@@ -106,7 +117,7 @@ export async function runCommandAndWait(
     if (disconnected) return disconnected;
     return { ok: false, completed: false, output: '', code: 'TERMINAL_WRITE_FAILED', error: t('Could not write to the terminal: {{error}}', { error: e instanceof Error ? e.message : String(e) }) };
   } finally {
-    completion?.dispose();
+    if (!retainedCompletion) completion?.dispose();
     agentControl.release(paneId);
   }
 }
@@ -287,7 +298,7 @@ function waitForCompletion(
 
     const timeoutTimer = setTimeout(() => {
       const out = getRecentOutputFor(paneId, 30);
-      finish({ ok: false, completed: false, output: tail(out), code: 'COMMAND_TIMEOUT', error: t('Command timed out after {{seconds}} seconds. It may still be running; use read_terminal before sending another command.', { seconds: Math.round(timeoutMs / 1000) }) });
+      finish({ ok: false, completed: false, output: tail(out), code: 'COMMAND_TIMEOUT', error: t('Command timed out after {{seconds}} seconds. It may still be running; use read_terminal before sending another command. For a scan or build, bound the next attempt with an explicit timeout or run it in the background.', { seconds: Math.round(timeoutMs / 1000) }) });
     }, timeoutMs);
 
     const onAbort = () => {

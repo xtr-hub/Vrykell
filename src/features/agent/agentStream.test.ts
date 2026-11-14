@@ -25,7 +25,7 @@ import { diagnostic } from '@platform/diagnostics';
 import { useAgentSettings } from '@features/agent/stores/agentSettings';
 import { agentStream } from '@features/agent/services/agentStream';
 import { useUsageStore } from '@features/agent/stores/usage';
-import { setToolAuthorizer } from './stores/permissions';
+import { setToolAuthorizer, usePermissions } from './stores/permissions';
 import { t } from '@i18n';
 
 const mockInvoke = vi.mocked(invoke);
@@ -92,7 +92,7 @@ describe('agentStream (mocked IPC boundary)', () => {
       .rejects.toThrow(t('The selected model does not support image input. Choose a model with image input enabled.'));
     expect(mockInvoke.mock.calls.some(([command]) => command === 'llm_stream')).toBe(false);
   });
-  it('replays the complete persisted tool result into the next model request', async () => {
+  it('keeps persisted tool results as plain chat history without tool-call schema', async () => {
     setupInvoke('data: {"choices":[{"delta":{"content":"Using the previous result"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
     const original = useAgentSettings.getState().global;
     useAgentSettings.setState({ global: { ...original, agentMode: false, contextStrategy: 'off' } });
@@ -107,14 +107,70 @@ describe('agentStream (mocked IPC boundary)', () => {
         { role: 'user', content: 'Use the previous evidence' },
       ], () => {}, { paneId: null, tabId: 'history-owner' });
       const raw = mockInvoke.mock.calls.find(([name]) => name === 'llm_stream')?.[1] as { req: { body: string } };
-      const request = JSON.parse(raw.req.body) as { messages: Array<{ role: string; content: string; tool_calls?: { id: string; function: { arguments: string } }[]; tool_call_id?: string }> };
-      const call = request.messages.find(message => message.tool_calls?.length);
-      const result = request.messages.find(message => message.role === 'tool');
-      expect(call?.tool_calls?.[0]?.id).toBe('previous-call');
-      expect(result?.tool_call_id).toBe('previous-call');
-      expect(result?.content).toBe(full);
+      const request = JSON.parse(raw.req.body) as { messages: Array<{ role: string; content: string; tool_calls?: unknown[]; tool_call_id?: string }> };
+      expect(request.messages.some(message => message.tool_calls?.length)).toBe(false);
+      expect(request.messages.some(message => message.role === 'tool')).toBe(false);
+      const history = request.messages.find(message => message.role === 'assistant');
+      expect(history?.content).toContain('Read completed');
+      expect(history?.content).toContain('Earlier tool call in Agent mode');
+      expect(history?.content).toContain(full);
     } finally { useAgentSettings.setState({ global: original }); }
   });
+  it('names policy-disabled tools so the model does not call an absent tool', async () => {
+    setupInvoke('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    const originalSettings = useAgentSettings.getState().global;
+    const originalLevels = usePermissions.getState().levels;
+    useAgentSettings.setState({ global: { ...originalSettings, agentMode: true } });
+    usePermissions.setState({ levels: { ...originalLevels, run_command: 'deny' } });
+    try {
+      await agentStream([{ role: 'user', content: 'Run ls' }], () => {}, { paneId: null });
+      const raw = mockInvoke.mock.calls.find(([name]) => name === 'llm_stream')?.[1] as { req: { body: string } };
+      const request = JSON.parse(raw.req.body) as { messages: Array<{ role: string; content: string }> };
+      const system = request.messages.find(message => message.role === 'system')?.content ?? '';
+      expect(system).toContain('Tools disabled by the current policy');
+      expect(system).toContain('run_command');
+      expect(system).toContain('Only call the tools provided in this request');
+    } finally {
+      usePermissions.setState({ levels: originalLevels });
+      useAgentSettings.setState({ global: originalSettings });
+    }
+  });
+
+  it('does not surface a tool call in chat mode without tools', async () => {
+    setupInvoke('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"chat-call","type":"function","function":{"name":"run_command","arguments":"{\\"command\\":\\"pwd\\"}"}}]},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n');
+    const original = useAgentSettings.getState().global;
+    useAgentSettings.setState({ global: { ...original, agentMode: false, contextStrategy: 'off' } });
+    const events: unknown[] = [];
+    const chunks: string[] = [];
+    try {
+      await agentStream([{ role: 'user', content: 'Where am I?' }], chunk => { chunks.push(chunk); }, {
+        paneId: null, handlers: { onToolEvent: run => { events.push(run); } },
+      });
+      expect(events).toEqual([]);
+      expect(chunks.join('')).toContain(t('The model attempted to use a tool, but tools are disabled in chat mode. Enable Agent mode to execute it.'));
+    } finally { useAgentSettings.setState({ global: original }); }
+  });
+
+  it('turns an unavailable tool call into a note instead of a tool error card', async () => {
+    setupInvoke('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"missing-call","type":"function","function":{"name":"run_command","arguments":"{\\"command\\":\\"pwd\\"}"}}]},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n');
+    const originalSettings = useAgentSettings.getState().global;
+    const originalLevels = usePermissions.getState().levels;
+    useAgentSettings.setState({ global: { ...originalSettings, agentMode: true, maxSteps: 1 } });
+    usePermissions.setState({ levels: { ...originalLevels, run_command: 'deny' } });
+    const events: unknown[] = [];
+    const chunks: string[] = [];
+    try {
+      await agentStream([{ role: 'user', content: 'Run ls' }], chunk => { chunks.push(chunk); }, {
+        paneId: null, handlers: { onToolEvent: run => { events.push(run); } },
+      });
+      expect(events).toEqual([]);
+      expect(chunks.join('')).toContain(t('The model tried to call an unavailable tool ({{tool}}). Only tools provided in this request can be used.', { tool: 'run_command' }));
+    } finally {
+      usePermissions.setState({ levels: originalLevels });
+      useAgentSettings.setState({ global: originalSettings });
+    }
+  });
+
   it('hands a denied tool back to the user with a text-only model step', async () => {
     const initial = useAgentSettings.getState().global;
     useAgentSettings.setState({ global: { ...initial, agentMode: true, maxSteps: 4 } });

@@ -182,12 +182,13 @@ it('keeps approval actions and failures visible without timeline nodes', () => {
   ] } }} />);
   expect(screen.getByRole('button', { name: '运行' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /读取文件.*失败/ }));
-  expect(screen.getByRole('alert')).toHaveTextContent('Missing file');
+  expect(container.querySelector('.ai-tool-verdict')).toHaveTextContent('Missing file');
+  expect(screen.queryByRole('alert')).toBeNull();
   expect(container.querySelectorAll('.ai-tool-card')).toHaveLength(2);
   expect(container.querySelector('[style*="position: absolute"]')).toBeNull();
 });
 
-it('opens a restored failure through explicit review and dismisses it outside the transcript', () => {
+it('opens a restored failure inside the card and collapses it again', () => {
   const { container } = render(<AiBlock conversationId="conversation" presentation="conversation" exchange={{ ...exchange, answer: { ...exchange.answer!, parts: [
     { kind: 'tool', tool: { toolCallId: 'failure', toolName: 'run_command', input: { command: 'cat /etc/hosts' }, state: 'error', startedAt: 1, error: 'Exit code 2' } },
   ] } }} />);
@@ -195,11 +196,11 @@ it('opens a restored failure through explicit review and dismisses it outside th
   expect(screen.queryByRole('alert')).toBeNull();
   expect(summary()).toHaveAttribute('aria-expanded', 'false');
   fireEvent.click(summary());
-  expect(screen.getByRole('alert')).toHaveTextContent('Exit code 2');
+  expect(container.querySelector('.ai-tool-verdict')).toHaveTextContent('Exit code 2');
   expect(summary()).toHaveAttribute('aria-expanded', 'true');
-  expect(container.querySelector('[role="alert"]')).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '关闭错误提示' }));
-  expect(screen.queryByRole('alert')).toBeNull();
+  expect(document.querySelector('#app-notifications [role="alert"]')).toBeNull();
+  fireEvent.click(summary());
+  expect(container.querySelector('.ai-tool-verdict')).toBeNull();
   expect(summary()).toHaveAttribute('aria-expanded', 'false');
 });
 
@@ -218,7 +219,8 @@ it('retains a late failure for explicit review after the row was collapsed', () 
   expect(screen.queryByRole('alert')).toBeNull();
   expect(container.querySelector('.ai-tool-state')).toHaveTextContent('失败');
   fireEvent.click(container.querySelector('.ai-tool-summary')!);
-  expect(screen.getByRole('alert')).toHaveTextContent('Exit code 2');
+  expect(container.querySelector('.ai-tool-verdict')).toHaveTextContent('Exit code 2');
+  expect(document.querySelector('#app-notifications [role="alert"]')).toBeNull();
 });
 
 const commandPart = { kind: 'tool' as const, tool: {
@@ -315,16 +317,17 @@ it('explains a reply whose provider sent its tool call as plain text', () => {
   expect(screen.queryByTestId('chat-leaked-tool-call')).toBeNull();
 });
 
-it('keeps a refusal available through explicit review without a footer error', () => {
+it('keeps a refusal inside the expanded card without a footer error', () => {
   const { container } = render(<AiBlock conversationId="conversation" exchange={{ ...exchange, answer: { ...exchange.answer!, parts: [
     { kind: 'tool', tool: { toolCallId: 'denied', toolName: 'run_command', input: { command: 'rm -rf /' }, state: 'denied', startedAt: 1, danger: '等待 5 分钟无人应答，已自动拒绝本次操作。' } },
   ] } }} />);
-  // The result retains its state; explicit review opens its reason in the notification region.
+  // The result retains its state; explicit review expands its reason in the transcript.
   expect(container.querySelector('.ai-tool-summary')).toHaveTextContent('已拒绝');
   expect(screen.queryByTestId('tool-denied-reason')).toBeNull();
   expect(document.querySelector('#app-notifications [role="alert"]')).toBeNull();
   fireEvent.click(container.querySelector<HTMLButtonElement>('.ai-tool-summary')!);
-  expect(document.querySelector('#app-notifications [role="alert"]')).toHaveTextContent('已自动拒绝本次操作');
+  expect(container.querySelector('.ai-tool-verdict')).toHaveTextContent('已自动拒绝本次操作');
+  expect(document.querySelector('#app-notifications [role="alert"]')).toBeNull();
   expect(screen.queryByRole('button', { name: '允许一次' })).toBeNull();
 });
 

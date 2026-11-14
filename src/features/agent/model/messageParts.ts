@@ -32,6 +32,31 @@ export interface ToolRun {
 
 export type MessagePart = { kind: 'text'; text: string } | { kind: 'tool'; tool: ToolRun };
 
+/**
+ * Recreate earlier Agent-mode results as plain text for chat mode. Sending structured
+ * `tool_calls` while no tools are registered invites the model to call them again and some
+ * providers reject that history, so discussion history keeps the evidence but not the schema.
+ */
+export function partsToDiscussionText(content: string, parts?: MessagePart[]): string {
+  if (!parts?.some(part => part.kind === 'tool')) return content;
+  const blocks: string[] = [];
+  let hasText = false;
+  for (const part of parts) {
+    if (part.kind === 'text') {
+      if (!part.text) continue;
+      blocks.push(part.text);
+      hasText = true;
+      continue;
+    }
+    const run = part.tool;
+    blocks.push(`[Earlier tool call in Agent mode: ${run.toolName} (${run.state})]`);
+    const result = run.modelOutput ?? run.output ?? run.error;
+    if (result) blocks.push(result);
+  }
+  if (!hasText && content) blocks.push(content);
+  return blocks.join('\n\n');
+}
+
 /** Recreate standard call/result pairs in transcript order; history never executes a tool. */
 export function partsToModelMessages(content: string, parts?: MessagePart[]): ModelMessage[] {
   if (!parts?.some(part => part.kind === 'tool')) return [{ role: 'assistant', content }];

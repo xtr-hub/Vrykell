@@ -1,8 +1,8 @@
 ﻿# Vrykell Development Rules
 
-> Last updated: 2026-10-27
+> Last updated: 2026-11-14
 >
-> Rule 43 clarification: tool cards retain their status and stored result without footer errors or automatic failure notifications. Explicit result review opens the shared bottom-right ErrorBox. Routine repository discovery and operation failures use timed bottom-right informational notifications with details and recovery. Persistent error notifications are reserved for failures that prevent continued use. Restoring history and approval outcomes never publish notifications. AI reply failures retain the shared inline ErrorBox.
+> Rule 43 clarification: tool cards retain their status and stored result without footer errors or automatic failure notifications. Explicit result review expands the reason and output inside the card, never in the notification region. Routine repository discovery and operation failures use timed bottom-right informational notifications with details and recovery. Persistent error notifications are reserved for failures that prevent continued use. Restoring history and approval outcomes never publish notifications. AI reply failures retain the shared inline ErrorBox.
 >
 > This file (`docs/en/development-rules.md`) is the English mirror of the rule book; the canonical
 > Chinese version is `docs/zh/development-rules.md`. `AGENTS.md` is the always-on summary, and

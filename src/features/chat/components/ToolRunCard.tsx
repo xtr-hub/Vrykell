@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { t, type I18nKey } from '@i18n';
 import { AskQuestion, Brain, Check, ChevronRight, FileText, Folder, Globe, Pencil, RefreshCw, Search, TerminalPrompt, Wrench, X } from '@ui/icons';
-import ErrorBox from '@ui/feedback/ErrorBox';
 import ToolOutput from './ToolOutput';
 import BlockOutput from '@features/terminal/components/BlockOutput';
 import { useBlockStore } from '@features/terminal';
@@ -93,15 +92,7 @@ function CommandOutputBlock({ run, paneId, framed }: { run: ToolRun; paneId?: st
  */
 export default function ToolRunCard({ run, paneId, framed = false, conversationId, environment, onAskAboutTool }: { run: ToolRun; paneId?: string; framed?: boolean; conversationId?: string; environment?: ChatEnvironment; onAskAboutTool?: (question: string) => void }) {
   const [toggled, setToggled] = useState<{ state: ToolRunState; open: boolean } | null>(null);
-  const [notice, setNotice] = useState(false);
-  const previous = useRef({ id: run.toolCallId, state: run.state });
   const problem = run.state === 'error' || run.state === 'denied';
-  useEffect(() => {
-    const last = previous.current;
-    previous.current = { id: run.toolCallId, state: run.state };
-    // Tool outcomes remain on their row; only explicit review opens diagnostics.
-    if (last.id !== run.toolCallId || last.state !== run.state) setNotice(false);
-  }, [run.toolCallId, run.state, problem]);
   const { icon, label, text } = summarize(run);
   const pending = run.state === 'approval-pending' || run.state === 'input-pending';
   const summaryTarget = run.state === 'approval-pending' ? environment ?? (paneId ? environmentForPane(paneId) : null) : null;
@@ -121,8 +112,8 @@ export default function ToolRunCard({ run, paneId, framed = false, conversationI
   const expandable = problem || run.toolName !== 'ask_user' && (isCommand || Object.keys(run.input).length > 0 || body.length > 0);
   const truncated = body.length > 6000;
   return <div className="ai-tool-card" data-tool-state={run.state} data-open={open}>
-    <button type="button" data-subtle className="ai-tool-summary" aria-label={[label, summaryText, status].filter(Boolean).join(' ')} aria-expanded={problem ? notice : open} disabled={!expandable || pending}
-      onClick={() => { if (problem) setNotice(true); else setToggled({ state: run.state, open: !open }); }}>
+    <button type="button" data-subtle className="ai-tool-summary" aria-label={[label, summaryText, status].filter(Boolean).join(' ')} aria-expanded={open} disabled={!expandable || pending}
+      onClick={() => setToggled({ state: run.state, open: !open })}>
       {icon}<span className="ai-tool-summary-text">
         <span className="ai-tool-label">{label}</span><span className="ai-tool-description" data-tip={summaryText || undefined}>{summaryText}</span>
       </span>
@@ -134,10 +125,10 @@ export default function ToolRunCard({ run, paneId, framed = false, conversationI
     </button>
     {run.toolName === 'ask_user' && <ToolQuestion run={run} conversationId={conversationId} />}
     {run.state === 'approval-pending' && <ToolApproval run={run} conversationId={conversationId} onAskAboutTool={onAskAboutTool} />}
-    {problem && notice && <ErrorBox title={label} details={`${t('Tool input')}\n${input}\n\n${t('Tool output')}\n${body}`} onDismiss={() => setNotice(false)}>
-      {run.state === 'denied' ? run.danger || run.error || t('Denied') : run.error || t('Tool execution failed')}
-    </ErrorBox>}
     {open && <div className="ai-tool-details">
+      {problem && <div className="ai-tool-verdict" role="status">
+        {run.state === 'denied' ? run.danger || run.error || t('Denied') : run.error || t('Tool execution failed')}
+      </div>}
       <div className="ai-tool-section-label">{t('Tool input')}</div>
       <pre className="ai-tool-input" data-selectable>{input}</pre>
       <div className="ai-tool-section-label">{t('Tool output')}</div>

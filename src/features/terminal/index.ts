@@ -1,5 +1,11 @@
 /** Public entry point for the terminal domain. */
-export { watchShellCommandCompletion, type ShellCommandCompletion } from './services/commandCompletion';
+export {
+  watchShellCommandCompletion,
+  retainCompletionForReadiness,
+  completionRecoveryReady,
+  clearCompletionReadiness,
+  type ShellCommandCompletion,
+} from './services/commandCompletion';
 export {
   useTerminalStore,
   termInstances,

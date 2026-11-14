@@ -34,11 +34,9 @@ test.describe('approval timeout', () => {
     const denied = page.getByTestId('ai-sidebar-content').locator('.ai-tool-card[data-tool-state="denied"]');
     await expect(denied).toBeVisible({ timeout: 15000 });
     await denied.locator('.ai-tool-summary').click();
-    const notice = page.locator('#app-notifications [data-error-notification]');
-    await expect(notice).toContainText('已自动拒绝');
-    await expect(notice).toContainText('无人应答');
-    await notice.getByRole('button', { name: '关闭错误提示', exact: true }).click();
-    await expect(page.locator('#app-notifications [role="status"]')).toHaveCount(0);
+    await expect(denied.locator('.ai-tool-verdict')).toContainText('已自动拒绝');
+    await expect(denied.locator('.ai-tool-verdict')).toContainText('无人应答');
+    await expect(page.locator('#app-notifications [data-error-notification]')).toHaveCount(0);
     await expect(page.getByRole('button', { name: '允许一次' })).toHaveCount(0);
 
     // The turn continued with the reply, so the model learns why its step never ran ...

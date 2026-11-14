@@ -21,12 +21,10 @@ test('keeps failed tool output and replies inside restored conversations across 
     await expect(workspace.getByText('回复未能完成', { exact: true })).toBeVisible();
     await expect(page.locator('#app-notifications [data-error-notification]')).toHaveCount(0);
     await workspace.locator('.ai-tool-summary').click();
-    const notice = page.locator('#app-notifications [data-error-notification]');
-    await expect(notice).toContainText('Exit code 3');
-    await notice.getByRole('button', { name: '技术详情', exact: true }).click();
-    await expect(notice).toContainText('service is inactive');
+    await expect(workspace.locator('.ai-tool-verdict')).toContainText('Exit code 3');
+    await expect(workspace.locator('.ai-tool-output')).toContainText('service is inactive');
+    await expect(page.locator('#app-notifications [data-error-notification]')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath(`inline-failure-${visit}.png`) });
-    await notice.getByRole('button', { name: '关闭错误提示', exact: true }).click();
     if (visit === 0) await page.reload();
   }
 });
